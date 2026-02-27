@@ -1,0 +1,18 @@
+[Unit]
+Description=PROMETHEUS DRGB Trading System
+After=network.target
+
+[Service]
+Type=simple
+User=derek
+WorkingDirectory=/opt/prometheus-drgb
+Environment=PYTHONPATH=/opt/prometheus-drgb/src
+ExecStart=/opt/prometheus-drgb/venv/bin/python -m prometheus.live_runner
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=prometheus
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,55 @@
+# PROMETHEUS Configuration
+# Override any value via env vars: PROMETHEUS_<SECTION>__<KEY>
+# Example: PROMETHEUS_RISK__MAX_DAILY_LOSS_PCT=0.03
+
+mode: paper  # paper | live
+symbol: BTC/USD
+tick_interval_seconds: 1.0
+
+drgb:
+  tension_window: 20
+  safe_threshold: 0.7
+  caution_threshold: 0.4
+  danger_threshold: 0.2
+  opportunity_tension: 0.05
+  stream_a_window: 100
+  stream_b_window: 50
+
+regime:
+  vol_window: 20
+  trend_window: 20
+  tension_threshold: 0.03
+  vol_low: 0.005
+  vol_high: 0.02
+  trend_strong: 0.003
+  trend_weak: 0.001
+
+risk:
+  max_daily_loss_pct: 0.02
+  max_weekly_loss_pct: 0.05
+  max_drawdown_pct: 0.10
+  max_position_pct: 0.10
+
+compounding:
+  base_kelly_fraction: 0.25
+  max_fraction: 0.10
+  min_fraction: 0.01
+
+evolution_phase_bars:
+  IMITATION: 0
+  OPTIMIZATION: 1000
+  RECOMBINATION: 5000
+  INVENTION: 20000
+  MASTERY: 50000
+
+strategy_library_path: data/strategies.json
+
+logging:
+  level: INFO
+  file: logs/prometheus.log
+  max_bytes: 10000000
+  backup_count: 5
+
+broker:
+  type: paper
+  initial_balance: 100000.0
