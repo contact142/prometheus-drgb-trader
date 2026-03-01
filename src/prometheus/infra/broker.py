@@ -76,6 +76,7 @@ class PaperBroker(BrokerInterface):
         self,
         initial_balance: float = 100_000.0,
         default_symbol: str = "BTC/USD",
+        min_hold_pct: float = 0.0,
     ) -> None:
         self._cash = initial_balance
         self._initial_balance = initial_balance
@@ -84,6 +85,7 @@ class PaperBroker(BrokerInterface):
         self._order_counter = 0
         self._last_prices: dict[str, float] = {}
         self._default_symbol = default_symbol
+        self._min_hold_pct = min_hold_pct  # min fraction of equity to keep in each asset
 
     def submit_order(
         self,
@@ -110,6 +112,28 @@ class PaperBroker(BrokerInterface):
         elif side == "sell":
             current = self._positions.get(symbol, 0)
             sell_qty = min(quantity, current)
+
+            # Enforce minimum hold: keep at least min_hold_pct of equity in this asset
+            if self._min_hold_pct > 0 and exec_price > 0:
+                equity = self._cash
+                for sym, qty in self._positions.items():
+                    equity += qty * self._last_prices.get(sym, 0)
+                min_hold_value = equity * self._min_hold_pct
+                min_hold_qty = min_hold_value / exec_price
+                max_sell_qty = max(0.0, current - min_hold_qty)
+                if sell_qty > max_sell_qty:
+                    logger.info(
+                        "Min hold enforced for %s: capping sell from %.6f to %.6f "
+                        "(holding %.1f%% = $%.2f)",
+                        symbol, sell_qty, max_sell_qty,
+                        self._min_hold_pct * 100, min_hold_value,
+                    )
+                    sell_qty = max_sell_qty
+
+            if sell_qty <= 0:
+                logger.debug("Sell blocked for %s: min hold constraint", symbol)
+                sell_qty = 0.0
+
             self._cash += sell_qty * exec_price
             self._positions[symbol] = current - sell_qty
             quantity = sell_qty

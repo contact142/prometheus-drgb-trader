@@ -11,7 +11,7 @@ import yaml
 
 _DEFAULT_CONFIG: dict[str, Any] = {
     "mode": "paper",  # paper | live
-    "symbol": "BTC/USD",
+    "symbols": ["BTC/USD", "XMR/USD", "CANT/USD", "RNDR/USD"],
     "tick_interval_seconds": 1.0,
     "drgb": {
         "tension_window": 20,
@@ -59,6 +59,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
     "broker": {
         "type": "paper",
         "initial_balance": 100000.0,
+        "min_hold_pct": 0.20,
     },
 }
 

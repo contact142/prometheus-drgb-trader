@@ -26,11 +26,28 @@ class BacktestRunner:
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
-        self.agent = PrometheusAgent(config)
+
+        # Multi-asset: use 'symbols' list, fall back to single 'symbol'
+        symbols_cfg = config.get("symbols")
+        if symbols_cfg:
+            self._symbols = list(symbols_cfg)
+        else:
+            self._symbols = [config.get("symbol", "BTC/USD")]
+
+        broker_cfg = config.get("broker", {})
         self.broker = PaperBroker(
-            initial_balance=config.get("broker", {}).get("initial_balance", 100_000),
+            initial_balance=broker_cfg.get("initial_balance", 100_000),
+            default_symbol=self._symbols[0],
+            min_hold_pct=broker_cfg.get("min_hold_pct", 0.0),
         )
-        self._symbol = config.get("symbol", "BTC/USD")
+
+        # Per-asset agents
+        self._agents: dict[str, PrometheusAgent] = {}
+        for sym in self._symbols:
+            self._agents[sym] = PrometheusAgent(config)
+
+        # Backward compat: keep _symbol for single-asset CSV backtests
+        self._symbol = self._symbols[0]
 
     def run_from_csv(self, csv_path: str | Path) -> dict[str, Any]:
         """Run backtest from a CSV file.
@@ -56,7 +73,7 @@ class BacktestRunner:
                     volume=float(row.get("volume", 0)),
                 )
                 self.broker.update_price(self._symbol, tick.close)
-                trade = self.agent.process_tick(tick)
+                trade = self._agents[self._symbol].process_tick(tick)
 
                 if trade:
                     trades.append(trade)
@@ -71,33 +88,44 @@ class BacktestRunner:
         return self._summary(tick_count, trades)
 
     def run_synthetic(self, num_ticks: int = 10000) -> dict[str, Any]:
-        """Run backtest with synthetic data."""
+        """Run backtest with synthetic data across all configured symbols."""
+        from .live_runner import LiveRunner
+
         trades: list[TradeInstruction] = []
-        price = 50000.0
-        vol = 0.001
+
+        # Per-asset synthetic state
+        prices: dict[str, float] = {}
+        vols: dict[str, float] = {}
+        for sym in self._symbols:
+            defaults = LiveRunner.SYNTHETIC_DEFAULTS.get(sym, {"price": 100.0, "vol": 0.002})
+            prices[sym] = defaults["price"]
+            vols[sym] = defaults["vol"]
 
         for i in range(num_ticks):
-            ret = random.gauss(0, vol)
-            price *= 1 + ret
+            for sym in self._symbols:
+                ret = random.gauss(0, vols[sym])
+                prices[sym] *= 1 + ret
+                price = prices[sym]
 
-            tick = TickData(
-                timestamp=time.time() + i,
-                open=price * (1 - abs(ret) / 2),
-                high=price * (1 + abs(ret)),
-                low=price * (1 - abs(ret)),
-                close=price,
-                volume=random.uniform(0.1, 10.0),
-            )
-            self.broker.update_price(self._symbol, tick.close)
-            trade = self.agent.process_tick(tick)
+                tick = TickData(
+                    timestamp=time.time() + i,
+                    open=price * (1 - abs(ret) / 2),
+                    high=price * (1 + abs(ret)),
+                    low=price * (1 - abs(ret)),
+                    close=price,
+                    volume=random.uniform(0.1, 10.0),
+                )
+                self.broker.update_price(sym, tick.close)
+                trade = self._agents[sym].process_tick(tick)
 
-            if trade:
-                trades.append(trade)
-                side = "buy" if trade.direction > 0 else "sell"
-                balance = self.broker.get_balance()
-                qty = (balance["equity"] * trade.size_fraction) / tick.close
-                if qty > 0:
-                    self.broker.submit_order(self._symbol, side, qty, tick.close)
+                if trade:
+                    trades.append(trade)
+                    side = "buy" if trade.direction > 0 else "sell"
+                    balance = self.broker.get_balance()
+                    per_asset_fraction = trade.size_fraction / len(self._symbols)
+                    qty = (balance["equity"] * per_asset_fraction) / tick.close
+                    if qty > 0:
+                        self.broker.submit_order(sym, side, qty, tick.close)
 
         return self._summary(num_ticks, trades)
 
