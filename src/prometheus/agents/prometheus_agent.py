@@ -120,6 +120,9 @@ class PrometheusAgent:
             "drawdown_pct": 0.0,
         }
 
+        # Fitness tracking: strategy_id -> {wins, losses, total_pnl, trades}
+        self._strategy_stats: dict[str, dict[str, float]] = {}
+
         # Evolution phase thresholds (configurable)
         self._phase_thresholds = config.get(
             "evolution_phase_bars",
@@ -162,9 +165,9 @@ class PrometheusAgent:
         a_state = drgb_state["a_state"]
         regime = self.regime_detector.detect(a_state, drgb_state)
 
-        # 4. Select strategy
+        # 4. Select strategy (fitness-aware)
         strategy_id = self.strategy_selector.select(
-            regime, drgb_state, self._recent_history()
+            regime, drgb_state, self._recent_history(), self._strategy_stats
         )
 
         # 5. Tune parameters
@@ -320,3 +323,42 @@ class PrometheusAgent:
     def update_risk_state(self, risk_state: dict[str, float]) -> None:
         """Update external risk metrics."""
         self._risk_state.update(risk_state)
+
+    def record_trade_outcome(self, strategy_id: str, pnl: float) -> None:
+        """Record a completed trade outcome and update strategy fitness.
+
+        Called by the LiveRunner when a sell closes a position (or partial).
+        """
+        if strategy_id not in self._strategy_stats:
+            self._strategy_stats[strategy_id] = {
+                "wins": 0, "losses": 0, "total_pnl": 0.0, "trades": 0,
+            }
+        stats = self._strategy_stats[strategy_id]
+        stats["trades"] += 1
+        stats["total_pnl"] += pnl
+        if pnl > 0:
+            stats["wins"] += 1
+        else:
+            stats["losses"] += 1
+
+        # Compute fitness: win_rate * avg_pnl_sign (rewards consistent winners)
+        total = stats["trades"]
+        win_rate = stats["wins"] / total if total > 0 else 0.0
+        avg_pnl = stats["total_pnl"] / total if total > 0 else 0.0
+
+        # Fitness = win_rate * (1 + tanh(avg_pnl * 100)) — bounded [0, 2]
+        import math
+        fitness = win_rate * (1.0 + math.tanh(avg_pnl * 100))
+
+        # Update library
+        meta = self.strategy_library.get(strategy_id)
+        if meta:
+            meta.fitness_score = fitness
+            meta.trade_count = int(total)
+            meta.win_rate = win_rate
+            self.strategy_library.register(meta)  # persists to disk
+
+        logger.info(
+            "Fitness update: %s → %.3f (W/L=%d/%d, avg_pnl=$%.4f)",
+            strategy_id, fitness, int(stats["wins"]), int(stats["losses"]), avg_pnl,
+        )

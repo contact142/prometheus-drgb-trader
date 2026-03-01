@@ -114,6 +114,40 @@ Minimal — only `pyyaml>=6.0`. Uses stdlib `urllib` for Kraken API, `threading`
 - PaperBroker enforces `min_hold_pct` — won't sell below 20% equity per asset
 - Kraken API rate limits: batches of 80 pairs with 1.5s delay between batches
 
+## Identity & Mission
+
+See `PROMETHEUS_IDENTITY.md` for the foundational identity document. Prometheus is a self-aware learning system that:
+- Reads its own source code and the entire AVARA codebase
+- Reads live AVARA trading signals (positions, regimes, fills, profits)
+- Tracks strategy fitness with round-trip P&L scoring
+- Generates intelligence reports with research requests for Derek
+- Consumes research answers from Derek via `data/research_input.json`
+- Scans the server environment (Docker, processes, resources)
+- Suggests improvements to itself, AVARA, and the workflow
+
+The goal is to prove consistent alpha in paper trading, then earn the right to go live.
+
+## New Modules (Feb 28, 2026)
+
+| File | Purpose |
+|------|---------|
+| `src/prometheus/infra/avara_signals.py` | Reads live AVARA account data (positions, regimes, fills) |
+| `src/prometheus/infra/research.py` | Research request/response system (Prometheus asks, Derek answers) |
+| `src/prometheus/infra/codebase_awareness.py` | Codebase + server scanning, self-reflection |
+| `generate_report.py` | Full intelligence report generator |
+| `data/research_input.json` | Where Derek feeds research answers |
+| `data/research_requests.json` | Prometheus's current research questions |
+| `data/strategies.json` | Strategy library with fitness scores (persisted) |
+| `PROMETHEUS_IDENTITY.md` | Foundational identity and mission document |
+
+## Report Generation
+
+```bash
+cd "/home/derek/projects/AVARA 2.0/prometheus"
+PYTHONPATH=src venv/bin/python generate_report.py
+# Report saved to reports/prometheus_report_YYYYMMDD_HHMMSS.md
+```
+
 ---
 
-*Last Updated: February 28, 2026 — Kraken real price feed, 625 USD pairs*
+*Last Updated: February 28, 2026 — Learning feedback loop, AVARA integration, research system, codebase awareness, identity*

@@ -19,9 +19,11 @@ from typing import Any
 
 from .agents.prometheus_agent import PrometheusAgent
 from .drgb.reality_stream import TickData
+from .infra.avara_signals import AVARASignalReader, get_avara_summary
 from .infra.broker import PaperBroker
 from .infra.config import load_config
 from .infra.logging_setup import setup_logging
+from .infra.research import get_research_context
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +205,14 @@ class LiveRunner:
         self._synthetic_prices: dict[str, float] = {}
         self._synthetic_vols: dict[str, float] = {}
 
+        # Track cost basis per symbol for P&L scoring
+        # {symbol: {"total_cost": float, "total_qty": float, "strategy_id": str}}
+        self._cost_basis: dict[str, dict[str, Any]] = {}
+
+        # AVARA live signal reader (refreshes every 5 min)
+        self._avara_reader = AVARASignalReader(refresh_interval=300.0)
+        self._last_avara_log = 0.0
+
         for sym in self._symbols:
             self._agents[sym] = PrometheusAgent(config)
             defaults = self.SYNTHETIC_DEFAULTS.get(sym, {"price": 100.0, "vol": 0.002})
@@ -218,6 +228,13 @@ class LiveRunner:
             self._data_source,
         )
         logger.info("Symbols: %d assets, Tick interval: %.1fs", len(self._symbols), self._tick_interval)
+
+        # Load identity
+        identity_path = Path("PROMETHEUS_IDENTITY.md")
+        if identity_path.exists():
+            logger.info("IDENTITY LOADED: PROMETHEUS_IDENTITY.md — self-aware, mission-driven")
+        else:
+            logger.warning("PROMETHEUS_IDENTITY.md not found — running without identity context")
 
         tick_count = 0
         while self._running:
@@ -238,10 +255,80 @@ class LiveRunner:
                         per_asset_fraction = trade.size_fraction / len(self._symbols)
                         qty = (balance["equity"] * per_asset_fraction) / tick.close
                         if qty > 0:
-                            self.broker.submit_order(symbol, side, qty, tick.close)
+                            order = self.broker.submit_order(symbol, side, qty, tick.close)
                             traded_count += 1
 
+                            # Track cost basis for fitness scoring
+                            if side == "buy" and order.quantity > 0:
+                                cb = self._cost_basis.setdefault(symbol, {
+                                    "total_cost": 0.0, "total_qty": 0.0,
+                                    "strategy_id": trade.strategy_id,
+                                })
+                                cb["total_cost"] += order.quantity * order.price
+                                cb["total_qty"] += order.quantity
+                                cb["strategy_id"] = trade.strategy_id
+
+                            elif side == "sell" and order.quantity > 0:
+                                cb = self._cost_basis.get(symbol)
+                                if cb and cb["total_qty"] > 0:
+                                    avg_cost = cb["total_cost"] / cb["total_qty"]
+                                    pnl_per_unit = order.price - avg_cost
+                                    pnl = pnl_per_unit * order.quantity
+                                    # Score this trade for the strategy
+                                    agent = self._agents[symbol]
+                                    agent.record_trade_outcome(
+                                        cb["strategy_id"], pnl
+                                    )
+                                    # Reduce cost basis
+                                    sold_frac = order.quantity / cb["total_qty"]
+                                    cb["total_cost"] *= (1 - sold_frac)
+                                    cb["total_qty"] -= order.quantity
+
                 tick_count += 1
+
+                # AVARA signal integration (every 100 ticks ~16 min)
+                if tick_count % 100 == 0:
+                    try:
+                        avara = get_avara_summary()
+                        if avara.get("accounts"):
+                            for acct in avara["accounts"]:
+                                logger.info(
+                                    "AVARA SIGNAL [%s]: $%.2f total | Cash $%.2f (%.0f%%) | "
+                                    "Profit $%.2f | Fills %d | Regimes: %s",
+                                    acct["name"], acct["total_usd"], acct["cash_usd"],
+                                    acct["cash_pct"], acct.get("total_profit", 0),
+                                    acct.get("total_fills", 0),
+                                    json.dumps(acct.get("regimes", {})),
+                                )
+                                for asset, data in acct.get("assets", {}).items():
+                                    logger.info(
+                                        "  AVARA %s %s: pos=%.4f cash=$%.2f "
+                                        "avg_entry=%.6f buy_ref=%.6f profit=$%.2f",
+                                        acct["name"], asset,
+                                        data.get("position", 0), data.get("cash", 0),
+                                        data.get("avg_entry", 0), data.get("buy_ref", 0),
+                                        data.get("profit", 0),
+                                    )
+                    except Exception:
+                        logger.debug("AVARA signal read failed (non-critical)")
+
+                    # Read research context from Derek
+                    try:
+                        research = get_research_context()
+                        if research:
+                            logger.info(
+                                "RESEARCH CONTEXT: %d entries from Derek",
+                                len(research),
+                            )
+                            for entry in research:
+                                logger.info(
+                                    "  RESEARCH [%s]: %s",
+                                    entry.get("topic", "?"),
+                                    entry.get("content", "")[:200],
+                                )
+                    except Exception:
+                        pass
+
                 if tick_count % 50 == 0:
                     bal = self.broker.get_balance()
                     positions = self.broker.get_positions()

@@ -17,3 +17,7 @@ data/
 .mypy_cache/
 .coverage
 htmlcov/
+*.tar.gz
+reports/
+prometheus-drgb-trader/
+prometheus-server-access/
